@@ -822,6 +822,54 @@ function isCorrect(q, tk){
   if(q.type === 'lyric') return !!(marks[q.id] && marks[q.id][tk]);
   return false;
 }
+
+/* ---------- AI marking (host only) ----------
+   When a round's answers recap starts, SHORT answers the fuzzy matcher
+   rejected get a second opinion from Claude via the 'mark' edge function
+   (the API key lives server-side, never in this file). AI verdicts are
+   written as ordinary marks rows, which isCorrect treats as authoritative.
+   AI only ever upgrades an answer to correct — it can't take points away —
+   and if the call fails, the fuzzy matcher's verdicts simply stand. */
+
+const AI_MARK_URL = SUPABASE_URL + '/functions/v1/mark';
+const aiMarkedRounds = new Set();
+
+async function aiMarkRecapRound(){
+  if(role !== 'host') return;
+  const ri = sessionState.roundIndex - 1;
+  const round = config.rounds[ri];
+  if(!round || aiMarkedRounds.has(ri)) return;
+  aiMarkedRounds.add(ri);
+  for(const q of round.questions || []){
+    if(q.type !== 'short') continue;
+    const pending = Object.keys(teams).filter(tk =>
+      hasAnswered(q, tk) &&
+      !(marks[q.id] && marks[q.id][tk] !== undefined) &&
+      !answersMatch(getAnswerFor(tk, q.id), q.answer)
+    ).map(tk => ({ key: tk, value: getAnswerFor(tk, q.id) }));
+    if(!pending.length) continue;
+    try{
+      const resp = await fetch(AI_MARK_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question: q.text, reference: q.answer, answers: pending })
+      });
+      if(!resp.ok) throw new Error('mark service ' + resp.status);
+      const { verdicts } = await resp.json();
+      let changed = false;
+      Object.entries(verdicts || {}).forEach(([tk, v])=>{
+        if(v === true && !(marks[q.id] && marks[q.id][tk] !== undefined)){
+          if(!marks[q.id]) marks[q.id] = {};
+          marks[q.id][tk] = true;
+          changed = true;
+        }
+      });
+      if(changed){ await storageSet('trivia-marks', marks, true); render(); }
+    }catch(e){
+      console.error('AI marking failed for', q.id, e, '— fuzzy verdicts stand');
+    }
+  }
+}
 // Is this team already out of an eliminator round by the time we reach question index uptoIdx?
 function isEliminated(round, uptoIdx, tk){
   if(!round || round.type !== 'eliminator') return false;
@@ -882,6 +930,7 @@ async function hostNextQuestion(){
 }
 async function hostShowAnswers(){
   await hostSetState({ screen:'answers', questionIndex: 0, extra: { answerPhaseStartedAt: Date.now() } });
+  aiMarkRecapRound(); // fire and forget; recap stats update via realtime when marks land
 }
 async function hostAnswersGo(delta){
   const round = config.rounds[sessionState.roundIndex - 1];
