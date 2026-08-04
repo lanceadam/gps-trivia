@@ -385,6 +385,32 @@ function configToText(cfg){
   return out.join('\n').trim();
 }
 
+// Lyric clips can be direct video files (hosted alongside the app on Pages)
+// instead of YouTube links — more reliable than embeds on venue wifi.
+function isVideoFile(url){ return typeof url === 'string' && /\.(mp4|webm|m4v|mov)(\?|#|$)/i.test(url.trim()); }
+function lyricMediaHtml(q){
+  if(isVideoFile(q.youtube)){
+    const hasStart = q.startSec !== null && q.startSec !== undefined && !isNaN(q.startSec);
+    const hasEnd = q.endSec !== null && q.endSec !== undefined && !isNaN(q.endSec);
+    const frag = hasStart ? `#t=${q.startSec}${hasEnd ? ',' + q.endSec : ''}` : '';
+    return `<div class="card" style="width:100%;max-width:720px;padding:8px;">
+      <video id="lyric-video" src="${q.youtube.trim()}${frag}" controls autoplay playsinline preload="auto" style="width:100%;max-height:420px;border-radius:12px;background:#000;"></video>
+    </div>`;
+  }
+  const embed = youtubeEmbedUrl(q.youtube, q.startSec, q.endSec);
+  return embed ? `<div class="card" style="width:100%;max-width:640px;padding:8px;"><iframe width="100%" height="360" src="${embed}" title="song clip" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen style="border-radius:12px;"></iframe></div>` : null;
+}
+// Media fragments (#t=start,end) handle the clip window in most browsers;
+// this guard makes the end cue reliable everywhere.
+function attachLyricVideoGuard(wrap, q){
+  const v = wrap.querySelector('#lyric-video');
+  if(!v) return;
+  const hasEnd = q.endSec !== null && q.endSec !== undefined && !isNaN(q.endSec);
+  if(hasEnd){
+    v.addEventListener('timeupdate', ()=>{ if(v.currentTime >= q.endSec && !v.paused) v.pause(); });
+  }
+}
+
 function youtubeEmbedUrl(url, startSec, endSec){
   if(!url) return null;
   let id = null;
@@ -1167,7 +1193,7 @@ function renderHostSetup(){
       <code>MC | question | opt1 | opt2 | opt3 | opt4 | correctIndex</code> &mdash; add a trailing image URL, or <code>IMG:key</code> for a photo I've baked in, to show a photo<br>
       <code>SHORT | question | reference answer</code> &mdash; auto-marked (typos and close matches count); list extra acceptable answers with <code>/</code>, e.g. <code>longest concrete arch / longest single-span concrete arch</code>. Also takes a trailing image URL or <code>IMG:key</code><br>
       <code>DOA | person | imageUrl or IMG:key | 0=dead/1=alive</code> &mdash; dead or alive question<br>
-      <code>LYRIC | lyric text | youtube URL | startSeconds | endSeconds</code> &mdash; only inside a <code>[type: lyric]</code> round. Start/end are optional, in seconds, and trim the clip to just that window<br>
+      <code>LYRIC | lyric text | youtube URL or video file (e.g. Billie-Jean.mp4) | startSeconds | endSeconds</code> &mdash; only inside a <code>[type: lyric]</code> round. Start/end are optional, in seconds, and trim the clip to just that window<br>
       <code>NHIE | prompt text</code> &mdash; only inside a <code>[type: nhie]</code> round<br>
       <code>AUCTION | item name | description | detail (value or time) | imageUrl or IMG:key</code> &mdash; only inside a <code>[type: auction]</code> round. For more than one photo, separate them with commas, e.g. <code>IMG:one,IMG:two,IMG:three</code><br>
       A <code>[type: headsortails]</code> round needs no question lines at all.</p>
@@ -1584,19 +1610,20 @@ function renderHostReveal(){
   const round = config.rounds[sessionState.roundIndex];
 
   if(q.type === 'lyric'){
-    const embed = youtubeEmbedUrl(q.youtube, q.startSec, q.endSec);
+    const media = lyricMediaHtml(q);
     const wrap = el(`
       <div class="question-stage">
         ${renderGameHeader(round, q.prize)}
         <div class="eyebrow">Answer reveal</div>
         <div class="qtext display glow-pink">${q.text}</div>
-        ${embed ? `<div class="card" style="width:100%;max-width:640px;padding:8px;"><iframe width="100%" height="360" src="${embed}" title="song clip" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen style="border-radius:12px;"></iframe></div>` : `<p class="muted">No video link for this one.</p>`}
+        ${media || `<p class="muted">No video link for this one.</p>`}
       </div>
       <div class="controlbar">
         <button class="btn-ghost" id="back-q">Back to question</button>
         <button class="btn-primary" id="to-next">Next question</button>
       </div>
     `);
+    attachLyricVideoGuard(wrap, q);
     wrap.querySelector('#back-q').onclick = ()=> hostSetState({ screen:'question' });
     wrap.querySelector('#to-next').onclick = hostNextQuestion;
     return wrap;
