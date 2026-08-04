@@ -744,11 +744,71 @@ function hasAnswered(q, tk){
   const ans = getAnswerFor(tk, q.id);
   return ans !== undefined && ans !== null && ans !== '';
 }
+/* ---------- short-answer auto-marking ----------
+   No human marker on the night, so SHORT answers are auto-marked:
+   lowercase/strip punctuation & accents/drop leading "the|a|an", then
+   accept exact matches, small typos (scaled by length), containment
+   either way ("pacific" vs "pacific ocean"), reordered keywords, or
+   digit-only equality ("1,000 feet" vs "1000 ft"). The reference answer
+   can list acceptable variants separated by "/". A host mark from the
+   reveal screen still overrides the auto verdict either way. */
+
+function normalizeAnswer(s){
+  return String(s||'').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9\s]/g,' ')
+    .replace(/\s+/g,' ').trim()
+    .replace(/^(the|a|an) /,'');
+}
+
+function levenshtein(a, b){
+  if(a === b) return 0;
+  if(!a.length) return b.length;
+  if(!b.length) return a.length;
+  let prev = Array.from({length: b.length + 1}, (_, i)=>i);
+  for(let i = 1; i <= a.length; i++){
+    const cur = [i];
+    for(let j = 1; j <= b.length; j++){
+      cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function answersMatch(guess, reference){
+  const g = normalizeAnswer(guess);
+  if(!g) return false;
+  return String(reference||'').split('/').some(refRaw=>{
+    const r = normalizeAnswer(refRaw);
+    if(!r) return false;
+    if(g === r) return true;
+    // small typos, tolerance scaled to answer length
+    const tol = r.length >= 12 ? 3 : r.length >= 6 ? 2 : 1;
+    if(levenshtein(g, r) <= tol) return true;
+    // numeric answers: compare digits only ("1,000 feet" vs "1000 ft")
+    const gd = g.replace(/\D/g,''), rd = r.replace(/\D/g,'');
+    if(rd && gd && rd === gd) return true;
+    // one contains the other and lengths are comparable
+    if(r.length >= 4 && (g.includes(r) || r.includes(g)) &&
+       Math.min(g.length, r.length) >= Math.ceil(Math.max(g.length, r.length) * 0.5)) return true;
+    // all significant reference words appear in the guess, any order, typo-tolerant
+    const gTokens = g.split(' ');
+    const rTokens = r.split(' ').filter(t=>t.length > 2);
+    if(rTokens.length >= 2 && rTokens.every(t=> gTokens.some(gt=> gt === t || levenshtein(gt, t) <= 1))) return true;
+    return false;
+  });
+}
+
 function isCorrect(q, tk){
   if(!hasAnswered(q, tk)) return false;
   const ans = getAnswerFor(tk, q.id);
   if(q.type === 'mc') return Number(ans) === Number(q.correct);
-  if(q.type === 'short' || q.type === 'lyric') return !!(marks[q.id] && marks[q.id][tk]);
+  if(q.type === 'short'){
+    if(marks[q.id] && marks[q.id][tk] !== undefined) return !!marks[q.id][tk]; // host override wins
+    return answersMatch(ans, q.answer);
+  }
+  if(q.type === 'lyric') return !!(marks[q.id] && marks[q.id][tk]);
   return false;
 }
 // Is this team already out of an eliminator round by the time we reach question index uptoIdx?
@@ -1034,7 +1094,7 @@ function renderHostSetup(){
       <h2 class="display" style="margin:24px 0 0;">Build your rounds</h2>
       <p class="muted" style="max-width:640px;text-align:left;">One line per question. Start each round with <code>### Round name</code>, optionally tagged <code>[type: eliminator|lyric|headsortails|nhie|auction]</code> (leave untagged for normal trivia).<br><br>
       <code>MC | question | opt1 | opt2 | opt3 | opt4 | correctIndex</code> &mdash; add a trailing image URL, or <code>IMG:key</code> for a photo I've baked in, to show a photo<br>
-      <code>SHORT | question | reference answer</code> &mdash; marked manually, also takes a trailing image URL or <code>IMG:key</code><br>
+      <code>SHORT | question | reference answer</code> &mdash; auto-marked (typos and close matches count); list extra acceptable answers with <code>/</code>, e.g. <code>longest concrete arch / longest single-span concrete arch</code>. Also takes a trailing image URL or <code>IMG:key</code><br>
       <code>DOA | person | imageUrl or IMG:key | 0=dead/1=alive</code> &mdash; dead or alive question<br>
       <code>LYRIC | lyric text | youtube URL | startSeconds | endSeconds</code> &mdash; only inside a <code>[type: lyric]</code> round. Start/end are optional, in seconds, and trim the clip to just that window<br>
       <code>NHIE | prompt text</code> &mdash; only inside a <code>[type: nhie]</code> round<br>
@@ -1088,12 +1148,13 @@ function renderHostRules(){
 function renderHostLobby(){
   // Now that the app lives at a real public URL, the join link is just
   // this page's own address — no more pasting a published-artifact link.
-  const joinUrl = location.origin + location.pathname;
+  // ?join drops scanners straight onto the team-name screen.
+  const joinUrl = location.origin + location.pathname + '?join';
   const wrap = el(`
     <div class="center-screen">
       <div class="eyebrow">Lobby</div>
       <h2 class="display glow-cyan" style="margin:0;">Teams, get ready</h2>
-      <p class="muted">Have teams scan the QR code, then tap "I'm on a team" to register.</p>
+      <p class="muted">Have teams scan the QR code and enter their team name.</p>
       <div id="qr" class="card" style="padding:16px;background:white;"></div>
       <p class="muted" style="word-break:break-all;max-width:500px;">${joinUrl}</p>
       <div class="card" style="min-width:280px;">
@@ -1822,7 +1883,19 @@ function renderTeamReveal(){
   `);
 }
 
-render();
+// Scanning the lobby QR (?join) skips role selection and goes straight
+// to the team-name screen. The plain URL still shows both role buttons.
+async function boot(){
+  if(new URLSearchParams(location.search).has('join')){
+    role = 'team';
+    render();        // show the join screen immediately
+    await loadAll(); // hydrate config/state behind it
+    render();
+  } else {
+    render();
+  }
+}
+boot();
 </script>
 </body>
 </html>
