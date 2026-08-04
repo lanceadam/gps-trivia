@@ -983,7 +983,13 @@ async function hostShowLeaderboard(){ await hostSetState({ screen:'leaderboard' 
 async function hostNextRound(){
   const nextRi = sessionState.roundIndex + 1;
   if(nextRi < config.rounds.length){
-    await hostSetState({ screen:'question', roundIndex: nextRi, questionIndex: 0, extra: {} });
+    const next = config.rounds[nextRi];
+    if(isGameRound(next)){
+      // Same splash as starting a game from the lobby.
+      await hostSetState({ screen:'gameintro', roundIndex: nextRi, questionIndex: 0, extra: {} });
+    } else {
+      await hostSetState({ screen:'question', roundIndex: nextRi, questionIndex: 0, extra: { questionStartedAt: Date.now() } });
+    }
   } else {
     await hostSetState({ screen:'end' });
   }
