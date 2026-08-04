@@ -233,6 +233,8 @@ let myAnswers = {};        // team's own answers cache
 let allAnswers = {};       // host-side: teamKey -> {qid: val}
 let allBuzzes = {};        // host-side: teamKey -> {questionId, timestamp}
 let myBuzzedQid = null;    // team-side: which lyric question id this device has buzzed for
+let draftAnswers = {};     // team-side: qid -> in-progress short-answer text, survives re-renders
+let draftTeamName = '';    // team-side: in-progress team name, survives re-renders
 let pollTimer = null;
 
 const SAMPLE_TEXT =
@@ -610,9 +612,12 @@ let pendingRender = false;
 const protectedInputIds = ['team-name', 'short-ans', 'cfg-editor', 'rules-editor'];
 
 // Don't clobber in-progress typing/pasting; render is deferred to blur.
-function guardedRender(){
+function guardActive(){
   const activeId = document.activeElement && document.activeElement.id;
-  if(activeId && protectedInputIds.includes(activeId)){ pendingRender = true; return; }
+  return !!(activeId && protectedInputIds.includes(activeId));
+}
+function guardedRender(){
+  if(guardActive()){ pendingRender = true; return; }
   render();
 }
 
@@ -637,7 +642,12 @@ function startSync(){
   if(pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(refreshFromRemote, 10000);
   document.addEventListener('blur', ()=>{
-    if(pendingRender){ pendingRender = false; render(); }
+    // Delay the deferred render: tapping Submit/Join blurs the input first,
+    // and re-rendering immediately would rebuild the DOM mid-tap and eat
+    // the click. 400ms lets the tap land on the current DOM.
+    setTimeout(()=>{
+      if(pendingRender && !guardActive()){ pendingRender = false; render(); }
+    }, 400);
   }, true);
 }
 
@@ -1627,14 +1637,18 @@ function renderTeam(){
         <p class="muted">If you get disconnected, just re-enter the same team name to rejoin.</p>
       </div>
     `);
+    const nameInput = join.querySelector('#team-name');
+    nameInput.value = draftTeamName;
+    nameInput.addEventListener('input', ()=>{ draftTeamName = nameInput.value; });
     const doJoin = async ()=>{
-      const name = join.querySelector('#team-name').value.trim();
+      const name = nameInput.value.trim();
       if(!name) return;
+      draftTeamName = '';
       await teamJoin(name);
       startSync();
     };
     join.querySelector('#join-btn').onclick = doJoin;
-    join.querySelector('#team-name').addEventListener('keydown', e=>{ if(e.key==='Enter') doJoin(); });
+    nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doJoin(); });
     wrap.appendChild(join);
     wrap.appendChild(renderSponsorFooter());
     return wrap;
@@ -1801,13 +1815,17 @@ function renderTeamQuestion(){
       </div>
     `);
     if(already===undefined){
+      const input = wrap.querySelector('#short-ans');
+      input.value = draftAnswers[q.id] || '';
+      input.addEventListener('input', ()=>{ draftAnswers[q.id] = input.value; });
       const submit = ()=>{
-        const val = wrap.querySelector('#short-ans').value.trim();
+        const val = input.value.trim();
         if(!val) return;
+        delete draftAnswers[q.id];
         teamSubmitAnswer(q.id, val);
       };
       wrap.querySelector('#submit-short').onclick = submit;
-      wrap.querySelector('#short-ans').addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+      input.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
     }
     return wrap;
   }
