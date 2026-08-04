@@ -618,6 +618,7 @@ function guardActive(){
 }
 function guardedRender(){
   if(guardActive()){ pendingRender = true; return; }
+  pendingRender = false;
   render();
 }
 
