@@ -709,8 +709,9 @@ function isGameRound(round){ return round && GAME_ROUND_TYPES.includes(round.typ
 
 let lastAutoAdvanceFor = null;
 let lastEliminatorRevealFor = null;
-const ANSWER_QUESTION_HOLD = 20;
-const ANSWER_REVEAL_HOLD = 10;
+// Recap pacing: question alone for 5s, then the answer and the
+// "X of Y tables got this right" stat appear together.
+const ANSWER_QUESTION_HOLD = 5;
 let lastAnswerPhaseKey = null;
 function updateTimerBadges(){
   const started = sessionState.extra && sessionState.extra.questionStartedAt;
@@ -756,7 +757,7 @@ function tickCountdown(){
     const answerStarted = sessionState.extra && sessionState.extra.answerPhaseStartedAt;
     if(answerStarted){
       const elapsed = Math.floor((Date.now() - answerStarted) / 1000);
-      const phase = elapsed < ANSWER_QUESTION_HOLD ? 'question' : elapsed < ANSWER_QUESTION_HOLD + ANSWER_REVEAL_HOLD ? 'answer' : 'stats';
+      const phase = elapsed < ANSWER_QUESTION_HOLD ? 'question' : 'reveal';
       const key = answerStarted + ':' + phase;
       if(lastAnswerPhaseKey !== key){
         lastAnswerPhaseKey = key;
@@ -1323,8 +1324,8 @@ function renderHostAnswers(){
   const q = round.questions[qi];
   const answerText = q.type === 'mc' ? q.options[q.correct] : (q.answer || '');
   const started = sessionState.extra && sessionState.extra.answerPhaseStartedAt;
-  const elapsed = started ? Math.floor((Date.now() - started) / 1000) : (ANSWER_QUESTION_HOLD + ANSWER_REVEAL_HOLD);
-  const phase = elapsed < ANSWER_QUESTION_HOLD ? 'question' : elapsed < ANSWER_QUESTION_HOLD + ANSWER_REVEAL_HOLD ? 'answer' : 'stats';
+  const elapsed = started ? Math.floor((Date.now() - started) / 1000) : ANSWER_QUESTION_HOLD;
+  const phase = elapsed < ANSWER_QUESTION_HOLD ? 'question' : 'reveal';
   const totalTeams = Object.keys(teams).length;
   const correctCount = Object.keys(teams).filter(tk => isCorrect(q, tk)).length;
   const wrap = el(`
@@ -1332,8 +1333,8 @@ function renderHostAnswers(){
       <div class="eyebrow">${round.name} answers &middot; ${qi+1} of ${round.questions.length}</div>
       ${q.image ? `<img src="${q.image}" alt="" style="max-width:300px;max-height:240px;border-radius:16px;object-fit:cover;">` : ''}
       <div class="qtext display">${q.text}</div>
-      ${phase !== 'question' ? `<div class="display glow-cyan" style="font-size:clamp(24px,3.5vw,36px);">${answerText}</div>` : ''}
-      ${phase === 'stats' ? `<div class="pill" style="font-size:18px;padding:10px 24px;">${correctCount} of ${totalTeams} tables got this right</div>` : ''}
+      ${phase === 'reveal' ? `<div class="display glow-cyan" style="font-size:clamp(24px,3.5vw,36px);">${answerText}</div>` : ''}
+      ${phase === 'reveal' ? `<div class="pill" style="font-size:18px;padding:10px 24px;">${correctCount} of ${totalTeams} tables got this right</div>` : ''}
     </div>
     <div class="controlbar">
       <button class="btn-ghost" id="prev-a" ${qi===0 ? 'disabled':''}>Previous</button>
