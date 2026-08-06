@@ -945,14 +945,10 @@ async function hostSetState(patch){
 
 async function hostGoLobby(){ await hostSetState({ screen:'lobby' }); }
 async function hostStartRound(ri){
-  const round = config.rounds[ri];
-  if(isGameRound(round)){
-    // Game rounds open on a splash — just the GAME banner and the title —
-    // so the host can explain the rules before any game content appears.
-    await hostSetState({ screen:'gameintro', roundIndex: ri, questionIndex: 0, extra: {} });
-  } else {
-    await hostSetState({ screen:'question', roundIndex: ri, questionIndex: 0, extra: { questionStartedAt: Date.now() } });
-  }
+  // Every round opens on a splash — "Round X" for trivia, the GAME banner +
+  // title for games, "AUCTION" for the auction — so the host can set it up
+  // before any content appears. Timers start when the host hits Start.
+  await hostSetState({ screen:'gameintro', roundIndex: ri, questionIndex: 0, extra: {} });
 }
 async function hostNextQuestion(){
   const r = config.rounds[sessionState.roundIndex];
@@ -984,15 +980,12 @@ async function hostShowLeaderboard(){ await hostSetState({ screen:'leaderboard' 
 async function hostNextRound(){
   const nextRi = sessionState.roundIndex + 1;
   if(nextRi < config.rounds.length){
-    const next = config.rounds[nextRi];
-    if(isGameRound(next)){
-      // Same splash as starting a game from the lobby.
-      await hostSetState({ screen:'gameintro', roundIndex: nextRi, questionIndex: 0, extra: {} });
-    } else {
-      await hostSetState({ screen:'question', roundIndex: nextRi, questionIndex: 0, extra: { questionStartedAt: Date.now() } });
-    }
+    // Same splash as starting from the lobby.
+    await hostSetState({ screen:'gameintro', roundIndex: nextRi, questionIndex: 0, extra: {} });
   } else {
-    await hostSetState({ screen:'end' });
+    // After the last round (the auction): a drumroll moment before the
+    // final results are revealed.
+    await hostSetState({ screen:'winners' });
   }
 }
 async function hostFlipCoin(){
@@ -1168,6 +1161,8 @@ function renderHost(){
     wrap.appendChild(renderHostLobby());
   } else if(screen === 'gameintro'){
     wrap.appendChild(renderHostGameIntro());
+  } else if(screen === 'winners'){
+    wrap.appendChild(renderHostWinners());
   } else if(screen === 'question'){
     wrap.appendChild(renderHostQuestion());
   } else if(screen === 'reveal'){
@@ -1350,22 +1345,47 @@ function renderHostAnswers(){
   return wrap;
 }
 
-// Pre-game splash: only the GAME banner and the game's title, no prize and
-// no game content, so the host can talk through the rules first.
+// Round splash content: "Round X" for trivia rounds, the GAME banner +
+// title for game rounds, "AUCTION" for the auction. Shared by host and team.
+function roundIntroHtml(round){
+  if(isGameRound(round)){
+    return `${renderGameHeader(round, null)}
+      <h1 class="display" style="margin:0;font-size:clamp(36px,6vw,64px);${glowStyle(gameTheme(round).color)}">${round.name}</h1>`;
+  }
+  if(round.type === 'auction'){
+    return `<h1 class="display" style="margin:0;font-size:clamp(44px,8vw,84px);letter-spacing:.04em;${glowStyle('#ffd23f')}">AUCTION</h1>`;
+  }
+  return `<h1 class="display glow-cyan" style="margin:0;font-size:clamp(44px,8vw,84px);">${round.name}</h1>`;
+}
+
 function renderHostGameIntro(){
   const round = config.rounds[sessionState.roundIndex];
+  const label = isGameRound(round) ? 'Start game' : round.type === 'auction' ? 'Start auction' : 'Start round';
   const wrap = el(`
     <div class="center-screen">
-      ${renderGameHeader(round, null)}
-      <h1 class="display" style="margin:0;font-size:clamp(36px,6vw,64px);${glowStyle(gameTheme(round).color)}">${round.name}</h1>
+      ${roundIntroHtml(round)}
     </div>
     <div class="controlbar">
       <button class="btn-ghost" id="back-lobby">Back to lobby</button>
-      <button class="btn-primary" id="start-game">Start game</button>
+      <button class="btn-primary" id="start-game">${label}</button>
     </div>
   `);
   wrap.querySelector('#back-lobby').onclick = hostGoLobby;
   wrap.querySelector('#start-game').onclick = ()=> hostSetState({ screen:'question', questionIndex: 0, extra: { questionStartedAt: Date.now() } });
+  return wrap;
+}
+
+// Drumroll before the final results.
+function renderHostWinners(){
+  const wrap = el(`
+    <div class="center-screen">
+      <h1 class="display glow-pink" style="margin:0;font-size:clamp(40px,7vw,76px);text-align:center;">AND THE WINNERS ARE</h1>
+    </div>
+    <div class="controlbar">
+      <button class="btn-primary" id="show-final">Show final results</button>
+    </div>
+  `);
+  wrap.querySelector('#show-final').onclick = ()=> hostSetState({ screen:'end' });
   return wrap;
 }
 
@@ -1789,8 +1809,13 @@ function renderTeam(){
     const round = config.rounds[sessionState.roundIndex];
     wrap.appendChild(el(`
       <div class="center-screen">
-        ${renderGameHeader(round, null)}
-        <h1 class="display" style="margin:0;${glowStyle(gameTheme(round).color)}">${round.name}</h1>
+        ${roundIntroHtml(round)}
+      </div>
+    `));
+  } else if(screen === 'winners'){
+    wrap.appendChild(el(`
+      <div class="center-screen">
+        <h1 class="display glow-pink" style="margin:0;font-size:clamp(32px,9vw,56px);text-align:center;">AND THE WINNERS ARE</h1>
       </div>
     `));
   } else if(screen === 'question'){
